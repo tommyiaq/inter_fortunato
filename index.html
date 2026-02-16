@@ -210,6 +210,28 @@
             border-top: 1px solid #e0e0e0;
         }
 
+        .tabs {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+
+        .tab-btn {
+            padding: 8px 12px;
+            background: #f1f1f1;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: transparent;
+        }
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
@@ -241,6 +263,8 @@
     <div class="container">
         <h1>🔗 Classifica Link Votati</h1>
 
+        <div class="tabs" id="groupTabs"></div>
+
         <div class="message" id="message"></div>
 
         <div class="input-section">
@@ -265,10 +289,15 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
         import { getDatabase, ref, set, get, onValue, update } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-database.js";
 
+        const groups = ['3AAF','3AFS','3BFS','4AAF','4AFS','4BFS'];
+        let currentGroup = groups[0];
+
         let userId = generateUserId();
         let allLinks = {};
         let userVotes = {};
         let db;
+        let linksUnsub = null;
+        let votesUnsub = null;
 
         function generateUserId() {
             let id = localStorage.getItem('user_id');
@@ -292,28 +321,8 @@
             const app = initializeApp(firebaseConfig);
             db = getDatabase(app, "https://votazione-siti-default-rtdb.europe-west1.firebasedatabase.app");
 
-            // Listener per i link
-            onValue(ref(db, 'links'), (snapshot) => {
-                allLinks = snapshot.val() || {};
-                updateRanking();
-            });
-
-            // Listener per i voti dell'utente
-            onValue(ref(db, 'votes/' + userId), (snapshot) => {
-                userVotes = snapshot.val() || {};
-                updateRanking();
-                updateUserStatus();
-            });
-
-            // Check if user has a link
-            const userLinkRef = ref(db, 'user_links/' + userId);
-            const snapshot = await get(userLinkRef);
-            if (snapshot.exists()) {
-                document.getElementById('linkInput').disabled = true;
-                document.getElementById('addBtn').disabled = true;
-            }
-
-            updateUserStatus();
+            renderTabs();
+            setupListenersForGroup(currentGroup);
         }
 
         function normalizeUrl(url) {
@@ -357,8 +366,8 @@
                 return;
             }
 
-            // Check if user already has a link
-            const userLinkRef = ref(db, 'user_links/' + userId);
+            // Check if user already has a link (per group)
+            const userLinkRef = ref(db, 'user_links/' + currentGroup + '/' + userId);
             const snapshot = await get(userLinkRef);
             if (snapshot.exists()) {
                 showMessage('Hai già incollato un link. Puoi votare o aspettare il reset dei dati.', 'info');
@@ -367,8 +376,8 @@
 
             const linkId = 'link_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             
-            // Save link
-            await set(ref(db, 'links/' + linkId), {
+            // Save link (under group)
+            await set(ref(db, 'links/' + currentGroup + '/' + linkId), {
                 id: linkId,
                 url: url,
                 addedBy: userId,
@@ -376,8 +385,8 @@
                 votes: 0
             });
 
-            // Save user link
-            await set(ref(db, 'user_links/' + userId), linkId);
+            // Save user link (under group)
+            await set(ref(db, 'user_links/' + currentGroup + '/' + userId), linkId);
 
             input.value = '';
             input.disabled = true;
@@ -387,25 +396,34 @@
         }
 
         async function voteLink(linkId) {
-            if (userVotes[linkId]) {
-                showMessage('Hai già votato questo link', 'info');
-                return;
-            }
-
             const link = allLinks[linkId];
-            if (link && link.addedBy === userId) {
+            if (!link) return;
+
+            if (link.addedBy === userId) {
                 showMessage('Non puoi votare il tuo link', 'info');
                 return;
             }
 
-            if (link) {
-                // Update votes
-                await update(ref(db, 'links/' + linkId), {
+            const userVoted = !!userVotes[linkId];
+
+            if (userVoted) {
+                // Remove vote
+                const newVotes = Math.max((link.votes || 1) - 1, 0);
+                await update(ref(db, 'links/' + currentGroup + '/' + linkId), {
+                    votes: newVotes
+                });
+
+                // Remove user's vote record
+                await set(ref(db, 'votes/' + currentGroup + '/' + userId + '/' + linkId), null);
+
+                showMessage('✓ Voto rimosso', 'info');
+            } else {
+                // Add vote
+                await update(ref(db, 'links/' + currentGroup + '/' + linkId), {
                     votes: (link.votes || 0) + 1
                 });
 
-                // Save user vote
-                await set(ref(db, 'votes/' + userId + '/' + linkId), true);
+                await set(ref(db, 'votes/' + currentGroup + '/' + userId + '/' + linkId), true);
 
                 showMessage('✓ Voto registrato!', 'success');
             }
@@ -414,7 +432,7 @@
         function updateRanking() {
             const rankingList = document.getElementById('rankingList');
 
-            const sortedLinks = Object.values(allLinks).sort((a, b) => b.votes - a.votes);
+            const sortedLinks = Object.values(allLinks).sort((a, b) => (b.votes || 0) - (a.votes || 0));
 
             if (sortedLinks.length === 0) {
                 rankingList.innerHTML = '<div class="empty-message">Nessun link ancora. Sii il primo ad aggiungerne uno!</div>';
@@ -434,14 +452,13 @@
                             </a>
                         </div>
                         <div class="ranking-votes">
-                            <div class="vote-count">${link.votes} ${link.votes === 1 ? 'voto' : 'voti'}</div>
+                            <div class="vote-count">${link.votes || 0} ${ (link.votes || 0) === 1 ? 'voto' : 'voti'}</div>
                             <button 
                                 class="vote-btn" 
                                 onclick="window.voteLink('${link.id}')"
-                                ${userVoted ? 'disabled' : ''}
                                 ${isUserLink ? 'disabled' : ''}
                             >
-                                ${userVoted ? '✓ Votato' : 'Vota'}
+                                ${isUserLink ? 'Il tuo link' : (userVoted ? 'Rimuovi voto' : 'Vota')}
                             </button>
                         </div>
                     </div>
@@ -451,19 +468,86 @@
 
         async function updateUserStatus() {
             const statusEl = document.getElementById('userStatus');
-            
-            const userLinkRef = ref(db, 'user_links/' + userId);
+            const userLinkRef = ref(db, 'user_links/' + currentGroup + '/' + userId);
             const snapshot = await get(userLinkRef);
-            
+
             if (snapshot.exists()) {
                 const linkId = snapshot.val();
                 const userLink = allLinks[linkId];
                 if (userLink) {
-                    statusEl.innerHTML = `✓ Hai incollato un link: <strong>${userLink.url}</strong><br>Non puoi aggiungere altri link. Puoi votare gli altri link.`;
+                    statusEl.innerHTML = `✓ Hai incollato un link: <strong>${userLink.url}</strong><br>Non puoi aggiungere altri link in questo gruppo. Puoi votare gli altri link.`;
+                    document.getElementById('linkInput').disabled = true;
+                    document.getElementById('addBtn').disabled = true;
                 }
             } else {
                 statusEl.innerHTML = 'Puoi aggiungere 1 link';
+                document.getElementById('linkInput').disabled = false;
+                document.getElementById('addBtn').disabled = false;
             }
+        }
+
+        // Helpers per gruppi
+        function renderTabs() {
+            const container = document.getElementById('groupTabs');
+            container.innerHTML = '';
+            groups.forEach(g => {
+                const btn = document.createElement('button');
+                btn.className = 'tab-btn' + (g === currentGroup ? ' active' : '');
+                btn.textContent = g;
+                btn.addEventListener('click', () => {
+                    if (g === currentGroup) return;
+                    switchGroup(g);
+                });
+                container.appendChild(btn);
+            });
+        }
+
+        function detachListeners() {
+            if (typeof linksUnsub === 'function') {
+                linksUnsub();
+                linksUnsub = null;
+            }
+            if (typeof votesUnsub === 'function') {
+                votesUnsub();
+                votesUnsub = null;
+            }
+        }
+
+        function setupListenersForGroup(group) {
+            detachListeners();
+            currentGroup = group;
+            renderTabs();
+
+            // Listener per i link del gruppo
+            linksUnsub = onValue(ref(db, 'links/' + currentGroup), (snapshot) => {
+                allLinks = snapshot.val() || {};
+                updateRanking();
+            });
+
+            // Listener per i voti dell'utente nel gruppo
+            votesUnsub = onValue(ref(db, 'votes/' + currentGroup + '/' + userId), (snapshot) => {
+                userVotes = snapshot.val() || {};
+                updateRanking();
+                updateUserStatus();
+            });
+
+            // Check if user has a link in this group
+            (async () => {
+                const userLinkRef = ref(db, 'user_links/' + currentGroup + '/' + userId);
+                const snapshot = await get(userLinkRef);
+                if (snapshot.exists()) {
+                    document.getElementById('linkInput').disabled = true;
+                    document.getElementById('addBtn').disabled = true;
+                } else {
+                    document.getElementById('linkInput').disabled = false;
+                    document.getElementById('addBtn').disabled = false;
+                }
+                updateUserStatus();
+            })();
+        }
+
+        function switchGroup(group) {
+            setupListenersForGroup(group);
         }
 
         // Expose functions to global scope
