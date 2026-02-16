@@ -290,7 +290,7 @@
             };
 
             const app = initializeApp(firebaseConfig);
-            db = getDatabase(app);
+            db = getDatabase(app, "https://votazione-siti-default-rtdb.europe-west1.firebasedatabase.app");
 
             // Listener per i link
             onValue(ref(db, 'links'), (snapshot) => {
