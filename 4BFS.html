@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>4BFS - Classifica Link Votati</title>
+    <link rel="stylesheet" href="styles.css">
+    <script>window.GROUP_NAME = '4BFS';</script>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 Classifica Link Votati — 4BFS</h1>
+
+        <div class="message" id="message"></div>
+
+        <div class="input-section">
+            <input 
+                type="text" 
+                id="linkInput" 
+                placeholder="Incolla un link qui..." 
+                maxlength="2048"
+            >
+            <button id="addBtn">Aggiungi</button>
+        </div>
+
+        <div class="ranking-title">Top Link</div>
+        <div class="ranking-list" id="rankingList">
+            <div class="empty-message">Nessun link ancora. Sii il primo ad aggiungerne uno!</div>
+        </div>
+
+        <div class="user-status" id="userStatus"></div>
+    </div>
+
+    <script type="module" src="common.js"></script>
+</body>
+</html>
